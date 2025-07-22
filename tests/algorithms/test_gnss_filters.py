@@ -1,6 +1,9 @@
 """Test for GNSS filtering algorithms.
 
 """
+# This file demonstrates the use of pytest for unit testing. Its inputs are
+# defined in conftest.py, while the outputs are defined in test_gnss_filters.py 
+# that can be found in the same directory
 
 __authors__ = "Ashwin Kanhere, Derek Knowles"
 __date__ = "25 January 2022"

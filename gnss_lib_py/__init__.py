@@ -34,6 +34,7 @@ from gnss_lib_py.visualizations.plot_map import *
 from gnss_lib_py.visualizations.plot_metric import *
 from gnss_lib_py.visualizations.plot_skyplot import *
 from gnss_lib_py.visualizations.style import *
+from gnss_lib_py.visualizations.plot_kml import *
 
 # single location of version exists in pyproject.toml
 __version__ = metadata.version("gnss-lib-py")
