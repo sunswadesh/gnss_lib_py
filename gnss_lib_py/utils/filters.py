@@ -137,6 +137,11 @@ class BaseExtendedKalmanFilter(BaseFilter):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def rotate_sv_to_reception(self, u, predict_dict=None):
+        """Earth Rotation correction to satellite position model
+        """
+        raise NotImplementedError
 
 class BaseKalmanFilter(BaseExtendedKalmanFilter):
     """General Kalman Filter implementation. Implementated as special

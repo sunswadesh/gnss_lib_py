@@ -22,8 +22,8 @@ data_dir = "data/TutData"
 glp.make_dir(data_dir)
 
 # Downloaded files if needed
-derived_fname = "2023-09-07-18-59_device_gnss.csv"
-truth_fname   = "2023-09-07-18-59_ground_truth.csv"
+derived_fname = "2023-09-06-22-49_device_gnss.csv"
+truth_fname   = "2023-09-06-22-49_ground_truth.csv"
 
 # derived_fname = "device_gnss.csv"
 # truth_fname   = "ground_truth.csv"
@@ -46,23 +46,26 @@ true_data_path = os.path.join(data_dir, truth_fname)
 state_estimate = glp.solve_wls(derived_data)
 # fig = glp.plot_map(state_estimate)
 
+
 # Extended Kalman Filter
 state_ekf = glp.solve_gnss_ekf(derived_data)
 # fig = glp.plot_map(state_ekf)
 
+# Forward and backward Kalman Filter
+state_fbkf = glp.solve_gnss_ekf_with_smoothing(derived_data)
 
 # truth_data_second_trace = glp.AndroidGroundTruth2021(true_data_path)
 truth_data_second_trace = glp.AndroidGroundTruth2023(true_data_path)
 
 
-fig = glp.plot_map(state_estimate, truth_data_second_trace, state_ekf)
+# fig = glp.plot_map(state_estimate, truth_data_second_trace, state_ekf)
 
-fig.write_html("data/TutData/results/2023_Pixel7pro_FULL_WLS_EKFvsTruth.html")
-# Now open this file in any browser manually (e.g., by double-clicking or with `xdg-open my_map.html` from a WSL or Linux shell)
+# fig.write_html("data/TutData/results/2023_Pixel7pro_FULL_WLS_EKFvsTruth.html")
+# # Now open this file in any browser manually (e.g., by double-clicking or with `xdg-open my_map.html` from a WSL or Linux shell)
 
 # Export to KML
-kml_output_path = "data/TutData/results/2023-09-07-18-59_Pixel7pro_FULLtrajectory.kml"
+kml_output_path = "data/TutData/results/2023-09-06-22-49_Pixel7pro_FULLtrajectory.kml"
 
-glp.export_navdata_to_kml(state_estimate, truth_data_second_trace,state_ekf,
+glp.export_navdata_to_kml(state_estimate, truth_data_second_trace, state_ekf, state_fbkf,
                          filename=kml_output_path)
 

@@ -11,6 +11,7 @@ import numpy as np
 
 from gnss_lib_py.navdata.navdata import NavData
 from gnss_lib_py.navdata.operations import loop_time
+from gnss_lib_py.utils import constants as consts
 from gnss_lib_py.algorithms.snapshot import solve_wls
 from gnss_lib_py.utils.coordinates import ecef_to_geodetic
 from gnss_lib_py.utils.filters import BaseExtendedKalmanFilter
@@ -68,9 +69,21 @@ def solve_gnss_ekf(measurements, init_dict = None,
         sigma_0 = np.eye(init_dict["state_0"].size)
         init_dict["sigma_0"] = sigma_0
 
+    # if "Q" not in init_dict:
+    #     process_noise = np.eye(init_dict["state_0"].size)
+    #     init_dict["Q"] = process_noise
     if "Q" not in init_dict:
-        process_noise = np.eye(init_dict["state_0"].size)
-        init_dict["Q"] = process_noise
+    # process_noise = np.eye(init_dict["state_0"].size)  # (old, too generic)
+        init_dict["Q"] = np.diag([
+            1.0,  # x (position in meters^2)
+            1.0,  # y
+            1.0,  # z
+            0.1,  # vx (velocity in (m/s)^2)
+            0.1,  # vy
+            0.1,  # vz
+            10.0  # b (clock bias in meters^2)
+        ])
+
 
     if "R" not in init_dict:
         measurement_noise = np.eye(1) # gets overwritten
@@ -106,6 +119,8 @@ def solve_gnss_ekf(measurements, init_dict = None,
         predict_dict = {"delta_t" : delta_t}
         gnss_ekf.predict(predict_dict=predict_dict)
 
+        # rotate sv to reception frame
+        pos_sv_m = gnss_ekf.rotate_sv_to_reception(pos_sv_m, corr_pr_m, gnss_ekf.state[6, 0])
         # update step
         update_dict = {"pos_sv_m" : pos_sv_m.T}
         update_dict["measurement_noise"] = np.eye(pos_sv_m.shape[0])
@@ -138,6 +153,171 @@ def solve_gnss_ekf(measurements, init_dict = None,
     state_estimate["alt_rx_ekf_m"] = alt
 
     return state_estimate
+
+def solve_gnss_ekf_with_smoothing(measurements, init_dict=None, params_dict=None, delta_t_decimals=-2):
+    """
+    Runs forward GNSS EKF then backward RTS smoothing to improve state estimates.
+
+    Parameters
+    ----------
+    measurements : NavData
+        GNSS measurements instance with satellite positions and pseudorange.
+    init_dict : dict, optional
+        Initialization dictionary including 'state_0' and 'sigma_0'.
+    params_dict : dict, optional
+        Parameters dictionary controlling EKF behavior.
+    delta_t_decimals : int, optional
+        Decimal rounding for measurement timestamps grouping.
+
+    Returns
+    -------
+    smoothed_estimate : NavData
+        Smoothed receiver position, velocity, and clock bias estimates.
+    """
+
+    # Ensure init_dict keys required by GNSSEKF constructor exist
+    if init_dict is None:
+        init_dict = {}
+
+    if "state_0" not in init_dict:
+        pos_0 = None
+        for _, _, measurement_subset in loop_time(measurements, "gps_millis", delta_t_decimals=delta_t_decimals):
+            pos_0 = solve_wls(measurement_subset)
+            if pos_0 is not None:
+                break
+
+        state_0 = np.zeros((7, 1))
+        if pos_0 is not None:
+            state_0[:3, 0] = pos_0[["x_rx_wls_m", "y_rx_wls_m", "z_rx_wls_m"]]
+            state_0[6, 0] = pos_0[["b_rx_wls_m"]]
+
+        init_dict["state_0"] = state_0
+
+    if "sigma_0" not in init_dict:
+        sigma_0 = np.eye(init_dict["state_0"].size)
+        init_dict["sigma_0"] = sigma_0
+        
+    # Set default process noise covariance 'Q' if missing
+    # if "Q" not in init_dict:
+    #     state_dim = init_dict["state_0"].size
+    #     init_dict["Q"] = np.eye(state_dim) * 1e-3  # Tune this according to system
+    if "Q" not in init_dict:
+    # 7 states: [x, y, z, vx, vy, vz, b]
+    # Larger noise for position and velocity reduces over-smoothing
+        init_dict["Q"] = np.diag([
+            1e-1, 1e-1, 1e-1,  # Position noise (m^2)
+            1e-2, 1e-2, 1e-2,  # Velocity noise ((m/s)^2)
+            1e-3               # Clock bias noise (m^2)
+        ])
+
+
+    # Set default measurement noise covariance 'R' if missing
+    if "R" not in init_dict:
+        # Assuming measurement noise dimension = 1 (adjust if multiple measurements)
+        init_dict["R"] = np.eye(1)
+
+    # Initialize parameters dictionary if None
+    if params_dict is None:
+        params_dict = {}
+
+    # Instantiate EKF
+    gnss_ekf = GNSSEKF(init_dict, params_dict)
+
+    states = []
+    covariances = []
+    predicted_states = []
+    predicted_covariances = []
+    timestamps = []
+
+    # Forward EKF Filtering Loop
+    for timestamp, delta_t, measurement_subset in loop_time(measurements, "gps_millis"):
+        pos_sv_m = measurement_subset[["x_sv_m", "y_sv_m", "z_sv_m"]].T
+        pos_sv_m = np.atleast_2d(pos_sv_m)
+        corr_pr_m = measurement_subset["corr_pr_m"].reshape(-1, 1)
+
+        not_nan_idxs = ~np.isnan(pos_sv_m).any(axis=1) & ~np.isnan(corr_pr_m).any(axis=1)
+        pos_sv_m = pos_sv_m[not_nan_idxs]
+        corr_pr_m = corr_pr_m[not_nan_idxs]
+
+        # rotate sv to reception frame
+        pos_sv_m = gnss_ekf.rotate_sv_to_reception(pos_sv_m, corr_pr_m, gnss_ekf.state[6, 0])
+        
+        # Prediction step
+        predict_dict = {"delta_t": delta_t}
+        gnss_ekf.predict(predict_dict=predict_dict)
+
+        # Store predicted state and covariance for smoothing step
+        predicted_states.append(gnss_ekf.state.copy())
+        predicted_covariances.append(gnss_ekf.sigma.copy())
+
+        # Update step
+        update_dict = {
+            "pos_sv_m": pos_sv_m.T,
+            "measurement_noise": np.eye(pos_sv_m.shape[0])
+        }
+        gnss_ekf.update(corr_pr_m, update_dict=update_dict)
+
+        # Store filtered state and covariance
+        states.append(gnss_ekf.state.copy())
+        covariances.append(gnss_ekf.sigma.copy())
+        timestamps.append(timestamp)
+
+    # Convert lists to numpy arrays for vectorized operations
+    states = np.array(states)
+    covariances = np.array(covariances)
+    predicted_states = np.array(predicted_states)
+    predicted_covariances = np.array(predicted_covariances)
+    timestamps = np.array(timestamps)
+
+    # Initialize smoothed arrays with same shape
+    smoothed_states = np.zeros_like(states)
+    smoothed_covariances = np.zeros_like(covariances)
+
+    # RTS backward smoothing initialization (last step equal to filtered estimate)
+    smoothed_states[-1] = states[-1]
+    smoothed_covariances[-1] = covariances[-1]
+
+    # Backward RTS Smoother Loop
+    for t in reversed(range(len(states) - 1)):
+        delta_t = timestamps[t + 1] - timestamps[t]
+
+        # Get state transition matrix at time t
+        A = gnss_ekf.linearize_dynamics({"delta_t": delta_t})
+
+        P_t = covariances[t]
+        P_tp1_pred = predicted_covariances[t + 1]
+
+        # Compute smoother gain
+        G = P_t @ A.T @ np.linalg.inv(P_tp1_pred)
+
+        # Update smoothed state
+        smoothed_states[t] = states[t] + G @ (smoothed_states[t + 1] - predicted_states[t + 1])
+
+        # Update smoothed covariance
+        smoothed_covariances[t] = P_t + G @ (smoothed_covariances[t + 1] - P_tp1_pred) @ G.T
+
+    # Build NavData structure for smoothed output
+    smoothed_navdata = NavData()
+    smoothed_navdata["gps_millis"] = timestamps
+
+    # Assign smoothed states based on GNSSEKF state vector: [x,y,z,vx,vy,vz,b]
+    smoothed_navdata["x_rx_ekf_smooth_m"] = smoothed_states[:, 0]
+    smoothed_navdata["y_rx_ekf_smooth_m"] = smoothed_states[:, 1]
+    smoothed_navdata["z_rx_ekf_smooth_m"] = smoothed_states[:, 2]
+    smoothed_navdata["vx_rx_ekf_smooth_mps"] = smoothed_states[:, 3]
+    smoothed_navdata["vy_rx_ekf_smooth_mps"] = smoothed_states[:, 4]
+    smoothed_navdata["vz_rx_ekf_smooth_mps"] = smoothed_states[:, 5]
+    smoothed_navdata["b_rx_ekf_smooth_m"] = smoothed_states[:, 6]
+
+    # Convert ECEF to Geodetic coordinates for smoothed states
+    lat, lon, alt = ecef_to_geodetic(smoothed_navdata[[
+    "x_rx_ekf_smooth_m", "y_rx_ekf_smooth_m", "z_rx_ekf_smooth_m"]].reshape(3, -1))
+    smoothed_navdata["lat_rx_ekf_smooth_deg"] = lat
+    smoothed_navdata["lon_rx_ekf_smooth_deg"] = lon
+    smoothed_navdata["alt_rx_ekf_smooth_m"] = alt
+
+    return smoothed_navdata
+
 
 class GNSSEKF(BaseExtendedKalmanFilter):
     """GNSS-only EKF implementation.
@@ -284,3 +464,30 @@ class GNSSEKF(BaseExtendedKalmanFilter):
         else: # pragma: no cover
             raise NotImplementedError
         return H
+
+    def rotate_sv_to_reception(self, pos_sv_m, corr_pr_m, clock_bias):
+        """
+        Rotate satellite ECEF positions from transmission time to reception time
+        accounting for Earth's rotation during signal travel.
+        
+        Parameters:
+        -----------
+        pos_sv_m : np.ndarray, shape (num_sats, 3)
+            Satellite positions at transmission time (ECEF).
+        corr_pr_m : np.ndarray, shape (num_sats, 1)
+            Corrected pseudoranges (meters).
+        clock_bias : float
+            Receiver clock bias (meters).
+        
+        Returns:
+        --------
+        pos_sv_m_corr : np.ndarray, shape (num_sats, 3)
+            Satellite positions rotated to reception time frame.
+        """
+        delta_t = (corr_pr_m.reshape(-1) - clock_bias) / consts.C
+        dtheta = consts.OMEGA_E_DOT * delta_t
+        x_rot = np.cos(dtheta)*pos_sv_m[:, 0] + np.sin(dtheta)*pos_sv_m[:, 1]
+        y_rot = -np.sin(dtheta)*pos_sv_m[:, 0] + np.cos(dtheta)*pos_sv_m[:, 1]
+        pos_sv_m[:, 0] = x_rot
+        pos_sv_m[:, 1] = y_rot
+        return pos_sv_m
