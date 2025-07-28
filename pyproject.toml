@@ -17,10 +17,10 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9, < 3.13"
+python = ">=3.9, < 4.0"
 numpy = "^2.0.0"
 pandas = "^2.0.0"
-georinex = "<=1.16.1"
+georinex = "<=1.18"
 unlzw3 = "^0.2.1"
 pynmea2 = "^1.18.0"
 pytest = ">=7.2"

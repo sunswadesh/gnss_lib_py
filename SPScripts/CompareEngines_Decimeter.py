@@ -1,3 +1,4 @@
+# This script compares the performance of the GNSS algorithms using the Android Google Challenge data
 import os
 import urllib.request
 import gnss_lib_py as glp
@@ -28,15 +29,6 @@ truth_fname   = "2023-09-06-22-49_ground_truth.csv"
 # derived_fname = "device_gnss.csv"
 # truth_fname   = "ground_truth.csv"
 
-# download_if_needed(
-#     "https://raw.githubusercontent.com/Stanford-NavLab/gnss_lib_py/main/data/unit_test/google_decimeter_2023/2023-09-07-18-59-us-ca/pixel7pro/device_gnss.csv",
-#     os.path.join(data_dir, derived_fname)
-# )
-# download_if_needed(
-#     " https://raw.githubusercontent.com/Stanford-NavLab/gnss_lib_py/main/data/unit_test/google_decimeter_2023/2023-09-07-18-59-us-ca/pixel7pro/ground_truth.csv",
-#     os.path.join(data_dir, truth_fname)
-# )
-
 # Load data
 # derived_data = glp.AndroidDerived2021(os.path.join(data_dir, derived_fname), remove_timing_outliers=False)
 derived_data = glp.AndroidDerived2023(os.path.join(data_dir, derived_fname))
@@ -46,13 +38,18 @@ true_data_path = os.path.join(data_dir, truth_fname)
 state_estimate = glp.solve_wls(derived_data)
 # fig = glp.plot_map(state_estimate)
 
+# simple Kalman Filter
+state_kf = glp.solve_gnss_kf(derived_data)
 
 # Extended Kalman Filter
 state_ekf = glp.solve_gnss_ekf(derived_data)
 # fig = glp.plot_map(state_ekf)
 
-# Forward and backward Kalman Filter
+# # Forward and backward Kalman Filter
 state_fbkf = glp.solve_gnss_ekf_with_smoothing(derived_data)
+
+# Factor Graph filter
+# state_fg = glp.solve_gnss_factor_graph(derived_data)
 
 # truth_data_second_trace = glp.AndroidGroundTruth2021(true_data_path)
 truth_data_second_trace = glp.AndroidGroundTruth2023(true_data_path)
@@ -64,8 +61,8 @@ truth_data_second_trace = glp.AndroidGroundTruth2023(true_data_path)
 # # Now open this file in any browser manually (e.g., by double-clicking or with `xdg-open my_map.html` from a WSL or Linux shell)
 
 # Export to KML
-kml_output_path = "data/TutData/results/2023-09-06-22-49_Pixel7pro_FULLtrajectory.kml"
+kml_output_path = "data/TutData/results/2023-09-06-22-49_Pixel7pro_allFilters_FULLtrajectory.kml"
 
-glp.export_navdata_to_kml(state_estimate, truth_data_second_trace, state_ekf, state_fbkf,
+glp.export_navdata_to_kml(state_estimate, truth_data_second_trace, state_kf, state_ekf, state_fbkf,
                          filename=kml_output_path)
 

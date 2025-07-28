@@ -10,8 +10,8 @@ utils/ephemeris_downloader.py file.
 """
 
 
-__authors__ = "Ashwin Kanhere, Shubh Gupta"
-__date__ = "13 July 2021"
+__authors__ = "Ashwin Kanhere, Shubh Gupta, Swadesh Patra"
+__date__ = "24 July 2025"
 
 import os
 import warnings
@@ -35,6 +35,9 @@ class RinexNav(NavData):
     be sped up significantly by passing in the "satellites" parameter
     which in turn gets passed into the georinex library used to parse
     the rinex file.
+
+    ## NEW: This class now automatically detects and handles both RINEX 2.x
+    ## and RINEX 3.x navigation files.
 
     Inherits from NavData().
 
@@ -95,9 +98,8 @@ class RinexNav(NavData):
         """
 
         if satellites is not None and len(satellites) != 0:
-            constellations = set()
-            for sat in satellites:
-                constellations.add(sat[0])
+            ## NEW: Use a set for efficient lookup of constellations.
+            constellations = {sat[0] for sat in satellites}
         else:
             constellations = None
 
@@ -107,30 +109,38 @@ class RinexNav(NavData):
         data = pd.DataFrame()
         self.iono_params = {}
         for rinex_path in rinex_paths:
+            ## NEW: Call the updated dataframe loader which returns the header.
             new_data, rinex_header = self._get_ephemeris_dataframe(rinex_path,
                                                                    constellations)
-            data = pd.concat((data,new_data), ignore_index=True)
-            # The pandas dataframe is indexed by a (time, sv) tuple and
-            # the following line gets the date of the first entry and
-            # converts it to an equivalent time in gps_millis
-            first_time = new_data['time'][0]
-            day_start_time = first_time.replace(hour=0,
-                                                minute=0,
-                                                second=0,
-                                                tzinfo = timezone.utc)
-            start_gps_millis = float(datetime_to_gps_millis(day_start_time))
-            iono_params = self.get_iono_params(rinex_header,
-                                               constellations)
+            data = pd.concat((data, new_data), ignore_index=True)
 
-            if start_gps_millis not in self.iono_params \
-                or self.iono_params[start_gps_millis] is None:
-                self.iono_params[start_gps_millis] = iono_params
-            else:
-                for constellation, value in self.iono_params.items():
-                    if constellation not in \
-                        self.iono_params[start_gps_millis].keys():
+            ## NEW: Process header information only if data was found in the file.
+            if not new_data.empty:
+                # The pandas dataframe is indexed by a (time, sv) tuple and
+                # the following line gets the date of the first entry and
+                # converts it to an equivalent time in gps_millis
+                first_time = new_data['time'].iloc[0]
+                day_start_time = first_time.replace(hour=0, minute=0, second=0, microsecond=0,
+                                                    tzinfo=timezone.utc)
+                start_gps_millis = float(datetime_to_gps_millis(day_start_time))
+                
+                ## NEW: Get iono params using the version-aware helper function.
+                iono_params = self.get_iono_params(rinex_header, constellations)
+
+                if start_gps_millis not in self.iono_params:
+                    self.iono_params[start_gps_millis] = iono_params
+                elif self.iono_params[start_gps_millis] is None:
+                    self.iono_params[start_gps_millis] = iono_params
+                elif iono_params: # pragma: no cover
+                    # If params for this day already exist, merge new ones.
+                    for constellation, value in iono_params.items():
+                        if constellation not in \
+                                self.iono_params[start_gps_millis]:
                             self.iono_params[start_gps_millis][constellation] \
-                            = value
+                                = value
+        
+        if data.empty:
+            raise RuntimeError("No ephemeris data found in the provided RINEX file(s).")
 
         data.reset_index(inplace=True, drop=True)
         data.sort_values('time', inplace=True, ignore_index=True)
@@ -143,22 +153,23 @@ class RinexNav(NavData):
         # Replace datetime with gps_millis
         # Use the vectorized version of datetime_to_gps_millis
         gps_millis = datetime_to_gps_millis(data['time'])
-        # gps_millis = [np.float64(datetime_to_gps_millis(df_row['time'])) \
-        #                 for _, df_row in data.iterrows()]
         data['gps_millis'] = gps_millis
         data = data.drop(columns=['time'])
         data = data.rename(columns={"sv":"sv_id"})
+        
+        ## NEW: Unify week numbers from GPSWeek and GALWeek into one column.
+        ## RINEX 3 specifies that GALWeek is identical to GPSWeek.
         if "GPSWeek" in data.columns:
             data = data.rename(columns={"GPSWeek":"gps_week"})
             if "GALWeek" in data.columns:
                 data["gps_week"] = np.where(pd.isnull(data["gps_week"]),
-                                                      data["GALWeek"],
-                                                      data["gps_week"])
+                                            data["GALWeek"],
+                                            data["gps_week"])
         elif "GALWeek" in data.columns:
             data = data.rename(columns={"GALWeek":"gps_week"})
+            
         if len(data) == 0:
-            raise RuntimeError("No ephemeris data available for the " \
-                             + "given satellites")
+            raise RuntimeError("No ephemeris data available for the given satellites")
         return data
 
     def postprocess(self):
@@ -186,7 +197,7 @@ class RinexNav(NavData):
         rinex_path : string or path-like
             Filepath to rinex file
         constellations : set
-            Set of satellites {"ConstIDSVID"}
+            Set of constellations {"G", "E", ...} to parse.
 
         Returns
         -------
@@ -196,38 +207,48 @@ class RinexNav(NavData):
             Header information from Rinex file.
 
         """
+        ## NEW: georinex handles filtering by constellation ('use' parameter).
+        ## This works for both RINEX 2 and 3.
+        data = gr.load(rinex_path, use=constellations, verbose=self.verbose).to_dataframe()
 
-        if constellations is not None:
-            data = gr.load(rinex_path,
-                                 use=constellations,
-                                 verbose=self.verbose).to_dataframe()
-        else:
-            data = gr.load(rinex_path,
-                                 verbose=self.verbose).to_dataframe()
         data.dropna(how='all', inplace=True)
         data.reset_index(inplace=True)
         data_header = gr.rinexheader(rinex_path)
+        
+        ## NEW: Leap seconds are loaded here using the version-aware helper.
         leap_seconds = self.load_leapseconds(data_header)
         data['leap_seconds'] = leap_seconds
         data['source'] = rinex_path
-        data['t_oc'] = pd.to_numeric(data['time'] - consts.GPS_EPOCH_0.replace(tzinfo=None))
-        data['t_oc']  = 1e-9 * data['t_oc'] - consts.WEEKSEC * np.floor(1e-9 * data['t_oc'] / consts.WEEKSEC)
-        data['time'] = data['time'].dt.tz_localize('UTC')
-        # Rename Keplerian orbital parameters to match a GLP standard
-        data.rename(columns={'M0': 'M_0', 'Eccentricity': 'e', 'Toe': 't_oe', 'DeltaN': 'deltaN', 'Cuc': 'C_uc', 'Cus': 'C_us',
-                             'Cic': 'C_ic', 'Crc': 'C_rc', 'Cis': 'C_is', 'Crs': 'C_rs', 'Io': 'i_0', 'Omega0': 'Omega_0'}, inplace=True)
-        data.rename(columns={'X': 'sv_x_m', 'dX': 'sv_dx_mps', 'dX2': 'sv_dx2_mps2',
-                             'Y': 'sv_y_m', 'dY': 'sv_dy_mps', 'dY2': 'sv_dy2_mps2',
-                             'Z': 'sv_z_m', 'dZ': 'sv_dz_mps', 'dZ2': 'sv_dz2_mps2'}, )
+        
+        ## NEW: Calculate time of clock (t_oc), which is needed for clock corrections.
+        if 'time' in data.columns and not data.empty:
+            data['t_oc'] = pd.to_numeric(data['time'] - consts.GPS_EPOCH_0.replace(tzinfo=None))
+            data['t_oc'] = 1e-9 * data['t_oc'] - consts.WEEKSEC * np.floor(1e-9 * data['t_oc'] / consts.WEEKSEC)
+            data['time'] = data['time'].dt.tz_localize('UTC')
+
+        ## NEW: Create a unified map to rename columns from both RINEX 2 and 3
+        ## formats to the internal standard used by gnss_lib_py.
+        rename_map = {
+            # Keplerian parameters (common in GPS, Galileo)
+            'M0': 'M_0', 'Eccentricity': 'e', 'Toe': 't_oe', 'DeltaN': 'deltaN',
+            'Cuc': 'C_uc', 'Cus': 'C_us', 'Cic': 'C_ic', 'Crc': 'C_rc',
+            'Cis': 'C_is', 'Crs': 'C_rs', 'Io': 'i_0', 'Omega0': 'Omega_0',
+            'OmegaDot': 'Omega_dot', 'IDOT': 'i_dot', 'RootOfA': 'sqrtA',
+            # State vector parameters (common in GLONASS)
+            'X': 'sv_x_m', 'dX': 'sv_dx_mps', 'dX2': 'sv_dx2_mps2',
+            'Y': 'sv_y_m', 'dY': 'sv_dy_mps', 'dY2': 'sv_dy2_mps2',
+            'Z': 'sv_z_m', 'dZ': 'sv_dz_mps', 'dZ2': 'sv_dz2_mps2'
+        }
+        data.rename(columns=rename_map, inplace=True)
+        
         return data, data_header
 
     def get_iono_params(self, rinex_header, constellations=None):
         """Gets ionosphere parameters from RINEX file header for calculation of
         ionosphere delay.
 
-        There are different possible ways of the header containing
-        parameters for ionosphere delay parameters. This function tries
-        different keys to extract the pertinent parameters.
+        ## NEW: This function now checks the RINEX version from the header
+        ## to decide on the correct parsing strategy.
 
         Parameters
         ----------
@@ -246,77 +267,80 @@ class RinexNav(NavData):
             shape of the array containing the ionospheric corrections.
         """
         iono_params = {}
-        # If path ends in .n, then the file contains only GPS satellites
-        if rinex_header['filetype']=='N' and rinex_header['systems']=='G':
-            try:
+        ## NEW: Explicitly check the version. Default to 2.0 if not found.
+        version = float(rinex_header.get('version', 2.0))
+
+        if version < 3:
+            ## NEW: Logic for RINEX 2 files.
+            # It looks for 'ION ALPHA' and 'ION BETA' fields.
+            if 'ION ALPHA' in rinex_header and 'ION BETA' in rinex_header:
                 ion_alpha_str = rinex_header['ION ALPHA'].replace('D', 'E')
                 ion_alpha = np.array(list(map(float, ion_alpha_str.split())))
                 ion_beta_str = rinex_header['ION BETA'].replace('D', 'E')
                 ion_beta = np.array(list(map(float, ion_beta_str.split())))
-            except KeyError:
-                ion_alpha = np.array([[np.nan]])
-                ion_beta = np.array([[np.nan]])
-            gps_iono_params = np.vstack((ion_alpha, ion_beta))
-            iono_params['gps'] = gps_iono_params
-        # If the path ends in .g, then the file constains GLONASS and no
-        # ionospheric parameters
-        if rinex_header['filetype']=='G':
-            iono_params = None
-        # If the path ends in .rnx, then the file contains multiple
-        # constellations, each with their own ionospheric parameters
-        if rinex_header['filetype']=='N' and rinex_header['systems']=='M':
-            try:
+                gps_iono_params = np.vstack((ion_alpha, ion_beta))
+                iono_params['gps'] = gps_iono_params
+        else:
+            ## NEW: Logic for RINEX 3 files.
+            # It looks for the 'IONOSPHERIC CORR' dictionary.
+            if 'IONOSPHERIC CORR' in rinex_header:
                 iono_corrs = rinex_header['IONOSPHERIC CORR']
                 iono_corr_key = self._iono_corr_key()
-                # If no constellations have been specified, then use all
-                # possible constellations.
+
                 if constellations is None:
                     constellations = list(iono_corr_key.keys())
-                # Loop through each constellation and load the parameters
+                
                 for constellation in constellations:
                     try:
-                        # Load the relevant keys for the corrections
                         const_keys = iono_corr_key[constellation]
                         if len(const_keys) == 2:
-                            temp_iono_params = np.empty([len(const_keys), 4])
-                            # Loop through the two constellation specific
-                            #keys to load the parameters
-                            for idx, const_key in enumerate(const_keys):
-                                temp_iono_params[idx, :] = iono_corrs[const_key]
+                            # For GPS, BeiDou, etc. with Alpha and Beta params
+                            temp_iono_params = np.array([iono_corrs[const_keys[0]], iono_corrs[const_keys[1]]])
                         else:
+                            # For Galileo with NeQuick params
                             temp_iono_params = np.asarray(iono_corrs[const_keys[0]])
                         iono_params[constellation] = temp_iono_params
                     except KeyError:
-                        # if no iono parameters are found for a particular
-                        # constellation, skip that constellation
+                        # Skip if no iono params for this constellation.
                         continue
-            except KeyError:
-                iono_params = None
-                warnings.warn("No ionospheric parameters found in RINEX file",
-                              RuntimeWarning)
-        return iono_params
+            else:
+                 warnings.warn("No ionospheric parameters found in RINEX 3+ file header.")
+        
+        return iono_params if iono_params else None
+
 
     @staticmethod
     def _iono_corr_key():
         """Correlations between satellite name and iono param name.
 
+        ## NEW: Now includes both full names and single-character IDs
+        ## to robustly map constellations to their header keys.
+
         Returns
         -------
-        iono_corr_key : list
+        iono_corr_key : dict
             String names for ionospheric correction parameters within
             the rinex navigation file.
 
         """
-        iono_corr_key = {}
-        iono_corr_key['gps'] = ['GPSA', 'GPSB']
-        iono_corr_key['galileo'] = ['GAL']
-        iono_corr_key['beidou'] = ['BDSA', 'BDSB']
-        iono_corr_key['qzss'] = ['QZSA', 'QZSB']
-        iono_corr_key['irnss'] = ['IRNA', 'IRNB']
+        iono_corr_key = {
+            'G': ['GPSA', 'GPSB'], 'E': ['GAL'],
+            'C': ['BDSA', 'BDSB'], 'J': ['QZSA', 'QZSB'],
+            'I': ['IRNA', 'IRNB']
+        }
+        # Also include text-based names for flexibility
+        iono_corr_key.update({
+            'gps': ['GPSA', 'GPSB'], 'galileo': ['GAL'],
+            'beidou': ['BDSA', 'BDSB'], 'qzss': ['QZSA', 'QZSB'],
+            'irnss': ['IRNA', 'IRNB']
+        })
         return iono_corr_key
 
     def load_leapseconds(self, rinex_header):
         """Read leapseconds from Rinex file
+
+        ## NEW: Now handles both RINEX 2 and RINEX 3 header formats
+        ## for the 'LEAP SECONDS' field.
 
         Parameters
         ----------
@@ -326,21 +350,22 @@ class RinexNav(NavData):
         Returns
         -------
         leap_seconds : int
-            Leap seconds read from file, return ``np.nan``  if not found.
+            Leap seconds read from file, return ``np.nan`` if not found.
 
         """
-        if rinex_header['systems']=='M':
-            try:
-                leap_seconds_line = rinex_header['LEAP SECONDS']
-                leap_seconds = int(leap_seconds_line[4]+leap_seconds_line[5])
-            except KeyError:
-                leap_seconds = np.nan
-        else:
-            try:
-                leap_seconds = int(rinex_header['LEAP SECONDS'].split()[0])
-            except KeyError:
-                leap_seconds = np.nan
-        return leap_seconds
+        try:
+            version = float(rinex_header.get('version', 2.0))
+            leap_seconds_line = rinex_header['LEAP SECONDS']
+            
+            if version < 3:
+                # RINEX 2: "18"
+                return int(leap_seconds_line.split()[0])
+            else:
+                # RINEX 3: [18, 18, 1929, 7] or similar list from georinex
+                return int(leap_seconds_line[0])
+        except (KeyError, IndexError, ValueError):
+            # Return NaN if the field is missing or malformed.
+            return np.nan
 
 
 def _compute_eccentric_anomaly(gps_week, gps_tow, ephem, tol=1e-5, max_iter=10):
@@ -374,11 +399,11 @@ def _compute_eccentric_anomaly(gps_week, gps_tow, ephem, tol=1e-5, max_iter=10):
 
     """
     #Extract required parameters from ephemeris and GPS constants
-    delta_n   = ephem['deltaN']
+    delta_n      = ephem['deltaN']
     mean_anom_0  = ephem['M_0']
     sqrt_sma = ephem['sqrtA'] # sqrt of semi-major axis
     sqrt_mu_a = np.sqrt(consts.MU_EARTH) * sqrt_sma**-3 # mean angular motion
-    ecc        = ephem['e']     # eccentricity
+    ecc          = ephem['e']      # eccentricity
     #Times for computing positions
     gpsweek_diff = (np.mod(gps_week,1024) - np.mod(ephem['gps_week'],1024))*604800.
     delta_t = gps_tow - ephem['t_oe'] + gpsweek_diff
@@ -393,11 +418,11 @@ def _compute_eccentric_anomaly(gps_week, gps_tow, ephem, tol=1e-5, max_iter=10):
         fun = mean_anom - ecc_anom + ecc * np.sin(ecc_anom)
         df_decc_anom = ecc*np.cos(ecc_anom) - 1.
         delta_ecc_anom   = -fun / df_decc_anom
-        ecc_anom    = ecc_anom + delta_ecc_anom
+        ecc_anom        = ecc_anom + delta_ecc_anom
 
     if np.any(delta_ecc_anom > tol): #pragma: no cover
         raise RuntimeWarning("Eccentric Anomaly may not have converged" \
-                            + f"after {max_iter} steps. : dE = {delta_ecc_anom}")
+                             + f"after {max_iter} steps. : dE = {delta_ecc_anom}")
 
     return ecc_anom
 
@@ -424,11 +449,8 @@ def _estimate_sv_clock_corr(gps_millis, ephem):
 
     """
     # Extract required GPS constants
-    ecc        = ephem['e']     # eccentricity
+    ecc          = ephem['e']      # eccentricity
     sqrt_sma = ephem['sqrtA'] # sqrt of semi-major axis
-
-    # if np.abs(delta_t).any() > 302400:
-    #     delta_t = delta_t - np.sign(delta_t)*604800
 
     gps_week, gps_tow = gps_millis_to_tow(gps_millis)
 
@@ -444,8 +466,8 @@ def _estimate_sv_clock_corr(gps_millis, ephem):
     # Calculate clock corrections from the polynomial corrections in
     # broadcast message
     corr_polynomial = (ephem['SVclockBias']
-                     + ephem['SVclockDrift']*t_offset
-                     + ephem['SVclockDriftRate']*t_offset**2)
+                       + ephem['SVclockDrift']*t_offset
+                       + ephem['SVclockDriftRate']*t_offset**2)
 
     # Calcualte the relativistic clock correction
     corr_relativistic = consts.F * ecc * sqrt_sma * np.sin(ecc_anom)
@@ -512,9 +534,7 @@ def get_time_cropped_rinex(gps_millis, satellites=None,
 
     """
 
-    constellations = set()
-    for sat in satellites:
-        constellations.add(consts.CONSTELLATION_CHARS[sat[0]])
+    constellations = {consts.CONSTELLATION_CHARS[sat[0]] for sat in satellites}
     constellations = list(constellations)
 
     rinex_paths = load_ephemeris("rinex_nav",gps_millis,constellations,
