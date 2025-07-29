@@ -2,7 +2,7 @@ import georinex as gr
 import os
 
 
-file_path = '../data/TutData/aspa3240.24o'
+file_path = 'data/TutData/aspa3240.24o'
 
 ds = gr.load(file_path)
 print(ds)

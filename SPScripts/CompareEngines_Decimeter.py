@@ -23,8 +23,11 @@ data_dir = "data/TutData"
 glp.make_dir(data_dir)
 
 # Downloaded files if needed
-derived_fname = "2023-09-06-22-49_device_gnss.csv"
-truth_fname   = "2023-09-06-22-49_ground_truth.csv"
+# derived_fname = "2023-09-06-22-49_device_gnss.csv"
+# truth_fname   = "2023-09-06-22-49_ground_truth.csv"
+derived_fname = "2023-03-08-21-34_Pixel6_device_gnss.csv"
+truth_fname   = "2023-03-08-21-34_Pixel6_ground_truth.csv"
+
 
 # derived_fname = "device_gnss.csv"
 # truth_fname   = "ground_truth.csv"
@@ -61,7 +64,8 @@ truth_data_second_trace = glp.AndroidGroundTruth2023(true_data_path)
 # # Now open this file in any browser manually (e.g., by double-clicking or with `xdg-open my_map.html` from a WSL or Linux shell)
 
 # Export to KML
-kml_output_path = "data/TutData/results/2023-09-06-22-49_Pixel7pro_allFilters_FULLtrajectory.kml"
+# kml_output_path = "data/TutData/results/2023-09-06-22-49_Pixel7pro_allFilters_FULLtrajectory.kml"
+kml_output_path = os.path.join(data_dir + "/results/", derived_fname[:-16] + "_Pixel6pro_allFilters_FULLtrajectory.kml")
 
 glp.export_navdata_to_kml(state_estimate, truth_data_second_trace, state_kf, state_ekf, state_fbkf,
                          filename=kml_output_path)

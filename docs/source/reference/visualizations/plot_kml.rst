@@ -1,7 +1,7 @@
-plot\_map module
+plot\_kml module
 ================
 
-.. automodule:: plot_map
+.. automodule:: plot_kml
    :members:
    :undoc-members:
    :show-inheritance:

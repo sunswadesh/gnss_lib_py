@@ -33,4 +33,4 @@ state_ekf = glp.solve_gnss_ekf(derived_data)
 
 # Plot and save map visualization
 fig = glp.plot_map(state_ekf)
-fig.write_html("data/TutData/results/EKF1.html")
+fig.write_html("data/TutData/results/EKF1_1.html")

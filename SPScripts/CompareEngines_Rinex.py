@@ -5,9 +5,16 @@ import gnss_lib_py as glp
 
 # Define the target directory and file path
 data_dir = "data/TutData"
+
+######## Observation files
 # file_name = "rinex_obs_mixed_types.20o"
-file_name = "aspa3240.24o"
-# file_path = os.path.join(data_dir, "brdc1370.20n")
+# file_name = "aspa3240.24o"
+file_name = "WARK00NZL_R_20243240000_01D_30S_MO.rnx"
+
+######## Navigation files
+# file_name = "brdc1370.20n"
+# file_name = "WROC00POL_R_20243240000_01D_GN.rnx"
+
 file_path = os.path.join(data_dir, file_name)
 
 # url = "https://raw.githubusercontent.com/Stanford-NavLab/gnss_lib_py/main/data/unit_test/rinex/nav/brdc1370.20n"
@@ -18,7 +25,7 @@ file_path = os.path.join(data_dir, file_name)
 # # This replaces `glp.make_dir("../data")`
 # os.makedirs(data_dir, exist_ok=True)
 
-# # Download the file only if it doesn't already exist
+# # # Download the file only if it doesn't already exist
 # if not os.path.exists(file_path):
 #     print(f"Downloading {os.path.basename(file_path)}...")
 #     response = requests.get(url)
@@ -30,9 +37,7 @@ file_path = os.path.join(data_dir, file_name)
 # else:
 #     print(f"'{file_path}' already exists. Skipping download.")
     
-# rinex_nav = glp.RinexNav("data/TutData/sfdm3240.24n")   
-# rinex_nav = glp.RinexNav("data/TutData/WROC00POL_R_20243240000_01D_GN.rnx")
-
+# rinex_nav = glp.RinexNav(file_path)   
 # print(rinex_nav)
 
 rinex_obs_3 = glp.RinexObs(file_path)
